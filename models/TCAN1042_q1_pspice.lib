@@ -1,0 +1,304 @@
+* TCAN1042-Q1 CAN FD transceiver -- PSpice behavioral model
+* Converted from TI TINA-TI macro 'TCAN1042-Q1.TSM' (SLLM403)
+*   (C) Texas Instruments. Original TINA macro: https://www.ti.com/lit/zip/sllm403
+* Conversion: TINA 'VALUE = {..}' -> PSpice 'VALUE {..}'. No circuit change.
+*
+* Usage: .lib 'TCAN1042_q1_pspice.lib'
+* Instance pins (order matters):
+*   X1 <TXD> <STB> <RXD> <CANH> <CANL> <VCC> <GND> TCAN1042
+* Drive TXD low (0V) = dominant  /  high (3.3/5V) = recessive
+* Receiver: RXD low = dominant when (CANH-CANL) >= 0.9V
+* STB low = normal mode.
+*
+.SUBCKT TCAN1042 TXD STB RXD CANH CANL VCC GND
+XU8         TXD TXDint STB STBint VCC GND BUF_0
+XU7         Muxout RXD VCC GND LOGIC_IO_0
+C3          RXDint2 GND 1P 
+C2          RXDint1 GND 1P 
+XU6         RXDint1 RXDint2 STB Muxout VCC GND MUX2X1_0
+XU2         STB CANH CANL RXDint2 VCC GND LPRCVR_0
+XU1         STB CANH CANL RXDint1 VCC GND HSRCVR_0
+XU5         VCC Precanhigh Precanlow canh1 canl1 GND DRVRCAN_0
+XU4         TXDint STBint Precanhigh Precanlow VCC GND PREDRIVER_0
+XU3         STB canh1 canl1 CANH CANL GND STBMODE_0
+.ENDS TCAN1042
+
+.SUBCKT BUF_0  TXD TXDINT STB STBINT VDD VSS
+CINTXD TXD VSS 5P
+X_SHITXD TXD VSS VDD TXDINT SHI
+X_SLOTXD TXD VSS VSS TXDINT SLO
+X_SHISTB STB VSS VDD STBINT SHI
+X_SLOSTB STB VSS VSS STBINT SLO
+.ENDS BUF_0 
+*$
+.SUBCKT SHI 1 2 3 4
+S_HI 3 4 1 2 SHIGH
+R 1 2 1E9
+.MODEL SHIGH VSWITCH ROFF=1E6 RON=1 VON=2.0 VOFF=0.8
+.ENDS SHI
+*$
+.SUBCKT SLO 1 2 3 4
+S_LO 3 4 1 2 SLOW
+R 1 2 1E9
+.MODEL SLOW VSWITCH ROFF=1E6 RON=1 VON=0.8 VOFF=2.0
+.ENDS SLO
+*$
+
+
+.SUBCKT LOGIC_IO_0  INP RXD VDD VSS
+X_SHI INP VSS VDD RXD SHI_logic
+X_SLO INP VSS VSS RXD SLO_logic
+.ENDS LOGIC_IO_0 
+*$
+.SUBCKT SHI_logic 1 2 3 4
+S_HI 3 4 1 2 SHIGH
+R 1 2 1E9
+.MODEL SHIGH VSWITCH ROFF=1E6 RON=200 VON=2.0 VOFF=0.8
+.ENDS SHI_logic
+*$
+.SUBCKT SLO_logic 1 2 3 4
+S_LO 3 4 1 2 SLOW
+R 1 2 1E9
+.MODEL SLOW VSWITCH ROFF=1E6 RON=100 VON=0.8 VOFF=2.0
+.ENDS SLO_logic
+*$
+
+
+*********************************************
+*     IDEAL MUX2X1 MODEL 
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+
+.SUBCKT MUX2X1_0  RXDINT1 RXDINT2 STB OUT VDD VSS
+X_NOT_0 VDD STB STBN VSS NOT_0
+X_AND_0 STBN RXDINT1 OUT1 VDD VSS AND_0
+X_AND_1 STB RXDINT2 OUT2 VDD VSS AND_0
+X_OR_0 OUT1 OUT2 OUT VDD VSS OR_0
+.ENDS MUX2X1_0 
+
+*********************************************
+*     IDEAL NOT GATE MODEL 
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+.SUBCKT NOT_0  VDD VI VO VSS 
+
+ESLICE VO 0  VALUE {IF(V(VI)>V(VCM),V(VSS),V(VDD))}
+ECM  VCM  0  VALUE {(V(VDD,0)+V(VSS,0))*0.5}
+
+.ENDS NOT_0
+
+*********************************************
+*     IDEAL AND GATE MODEL
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+.SUBCKT AND_0 A B Y VDD VSS
+EA  VA  0  VALUE {IF(V(A)>V(VCM),1,0)}
+EB  VB  0  VALUE {IF(V(B)>V(VCM),1,0)}
+ECM  VCM  0  VALUE {(V(VDD,0)+V(VSS,0))*0.5}
+
+EY  Y  0  VALUE {IF((V(VA)>0.5) & (V(VB)>0.5),V(VDD),V(VSS))}
+
+.ENDS AND_0
+
+*********************************************
+*     IDEAL OR GATE MODEL
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+.SUBCKT OR_0 A B Y VDD VSS
+
+EA  VA  0  VALUE {IF(V(A)>V(VCM),1,0)}
+EB  VB  0  VALUE {IF(V(B)>V(VCM),1,0)}
+ECM  VCM  0  VALUE {(V(VDD,0)+V(VSS,0))*0.5}
+
+EY  Y  0  VALUE {IF((V(VA)>0.5) | (V(VB)>0.5),V(VDD),V(VSS))}
+
+.ENDS OR_0
+
+
+*********************************************
+*      LOWPOWER RECEIVER MODEL 
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+
+.SUBCKT LPRCVR_0  STB CANH CANL RXDINT2 VDD VSS
+*CINH CANH VSS 24E-12
+*RINH CANH VSS 28E3
+*CINL CANL VSS 24E-12
+*RINL CANL VSS 28E3
+RID CANH CANL 54E3
+CID CANH CANL 12E-12
+X_RECV CANH CANL RXDINT VDD VSS RECVLP
+X_S1 STB VSS RXDINT RXDINT2 STB_SRECEIVER
+.ENDS LPRCVR_0 
+*$
+
+.SUBCKT RECVLP A B Y VDD VSS
+EY Y VSS  VALUE {IF(V(A,B)>=0.9,V(VSS),V(VDD))}
+*ESLICE VO 0  VALUE {IF(V(VI)>V(VCM),V(VSS),V(VDD))}
+.ENDS RECVLP
+*$
+
+.SUBCKT STB_SRECEIVER 1 2 3 4 
+S_S1 3 4 1 2 _S1
+RS_S1 1 2 1G
+.MODEL _S1 VSWITCH ROFF=1E12 RON=1000 VOFF=0.8 VON=2.0
+.ENDS STB_SRECEIVER
+*$
+*
+*  CANH       |\               STB
+*-------------|+\               |
+*        ^    |  \              |
+*        |    |   \             |/
+*        |    |LP  \   RXDINT   /
+*       VID   |RECVR\-----------  ------RXDINT2
+*        |    |     /     STB_SRECEIVER
+*        |    |    /
+*        V    |   /
+*-------------|- /
+*  CANL       | /
+*             |/
+*$
+
+
+*********************************************
+*      HIGHSPEED RECEIVER MODEL 
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+
+.SUBCKT HSRCVR_0  STB CANH CANL RXDINT1 VDD VSS
+*CINH CANH VSS 24E-12
+*RINH CANH VSS 28E3
+*CINL CANL VSS 24E-12
+*RINL CANL VSS 28E3
+RID CANH CANL 55E3
+CID CANH CANL 12E-12
+X_RECV CANH CANL RXDINT VDD VSS RECV
+X_S1 STB VSS RXDINT RXDINT1 STB_S1
+.ENDS HSRCVR_0 
+*$
+
+.SUBCKT RECV A B Y VDD VSS
+EY Y VSS  VALUE {IF(V(A,B)>=0.9,V(VSS),V(VDD))}
+*ESLICE VO 0  VALUE {IF(V(VI)>V(VCM),V(VSS),V(VDD))}
+.ENDS RECV
+*$
+
+.SUBCKT STB_S1 1 2 3 4 
+S_S1 3 4 1 2 _S1
+RS_S1 1 2 1G
+.MODEL _S1 VSWITCH ROFF=1E12 RON=1K VOFF=2.0 VON=0.8
+.ENDS STB_S1
+*$
+*
+*  CANH       |\               STB
+*-------------|+\               |
+*        ^    |  \              |
+*        |    |   \             |/
+*        |    |    \   RXDINT   /
+*       VID   |     \-----------  ------RXDINT1
+*        |    |     /         STB_S1
+*        |    |    /
+*        V    |   /
+*-------------|- /
+*  CANL       | /
+*             |/
+*$
+
+
+.SUBCKT DRVRCAN_0  VDD PRECANHIGH PRECANLOW CANH CANL VSS
+X_CANH PRECANHIGH CANH VDD CANH_DRV
+X_CANL PRECANLOW CANL VSS CANL_DRV
+.ENDS DRVRCAN_0 
+*$
+.SUBCKT CANH_DRV PRECANHIGH CANH VDD
+X_S1 PRECANHIGH 0 VDD CANH CANH_S1
+.ENDS CANH_DRV
+*$
+.SUBCKT CANH_S1 1 2 3 4 
+S_S1 3 4 1 2 _S1
+RS_S1 1 2 1G
+.MODEL _S1 VSWITCH ROFF=25E03 RON=36.3 VOFF=2.5 VON=0.8
+.ENDS CANH_S1
+*$
+.SUBCKT CANL_DRV PRECANLOW CANL GND
+X_S1 PRECANLOW GND GND CANL CANL_S1
+.ENDS CANL_DRV
+*$
+.SUBCKT CANL_S1 1 2 3 4
+S_S1 3 4 1 2 _S1
+RS_S1 1 2 1G
+.MODEL _S1 VSWITCH ROFF=25E03 RON=36.8 VOFF=0.8 VON=2.5
+.ENDS CANL_S1
+*$
+
+
+*********************************************
+*      PREDRIVER MODEL 
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+.SUBCKT PREDRIVER_0  TXD STB PRECANHIGH PRECANLOW VDD VSS
+X_OR0 TXD STB PRECANHIGH VDD VSS OR_0
+X_NOT0 VDD PRECANHIGH PRECANLOW VSS NOT_0
+.ENDS PREDRIVER_0 
+
+*********************************************
+*     IDEAL NOT GATE MODEL 
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+*.SUBCKT NOT_0  VDD VI VO VSS 
+
+*ESLICE VO 0  VALUE {IF(V(VI)>V(VCM),V(VSS),V(VDD))}
+*ECM  VCM  0  VALUE {(V(VDD,0)+V(VSS,0))*0.5}
+*
+*.ENDS NOT_0
+
+*********************************************
+*     IDEAL OR GATE MODEL
+*     TEXAS INSTRUMENTS INC.
+*********************************************
+*.SUBCKT OR_0 A B Y VDD VSS
+*
+*EA  VA  0  VALUE {IF(V(A)>V(VCM),1,0)}
+*EB  VB  0  VALUE {IF(V(B)>V(VCM),1,0)}
+*ECM  VCM  0  VALUE {(V(VDD,0)+V(VSS,0))*0.5}
+
+*EY  Y  0  VALUE {IF((V(VA)>0.5) | (V(VB)>0.5),V(VDD),V(VSS))}
+
+*.ENDS OR_0
+
+
+.SUBCKT STBMODE_0  STB CANH1 CANL1 CANH CANL VSS
+
+X_S1 STB VSS CANH1 CANH STB_S1STBMODE_0
+X_S2 STB VSS CANH VSS STBGND_S2STBMODE_0
+X_S3 STB VSS CANL1 CANL STB_S1STBMODE_0
+X_S4 STB VSS CANL VSS STBGND_S2STBMODE_0
+
+.ENDS STBMODE_0 
+*$
+
+.SUBCKT STB_S1STBMODE_0 1 2 3 4 
+S_S1 3 4 1 2 _S1
+RS_S1 1 2 1G
+.MODEL _S1 VSWITCH ROFF=18E09 RON=0.2 VOFF=2.0 VON=0.8
+.ENDS STB_S1STBMODE_0
+*$
+
+.SUBCKT STBGND_S2STBMODE_0 1 2 3 4
+S_S1 3 4 1 2 _S1
+RS_S1 1 2 1G
+.MODEL _S1 VSWITCH ROFF=18E09 RON=1 VOFF=0.8 VON=2.0
+.ENDS STBGND_S2STBMODE_0
+*$
+*          /
+*         /
+*H1/L1----  -------H/L
+*         S1   |
+*              |
+*               /
+*           S2 /
+*             |
+*             |
+*            GND
+*
+

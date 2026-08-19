@@ -1,0 +1,114 @@
+* ============================================================================
+*  CAN FD bus signal-integrity model -- two motors + junction(stub) scenario
+*  ============================================================================
+*  Hardware reference: ragtime_florid / dm_mc02 FDCAN
+*    arbitration 1 Mbps (bit=1000ns)  /  data 5 Mbps (bit=200ns)
+*    twisted pair diff Z0=120 ohm, velocity factor vf~0.78
+*
+*  Topology (default: daisy chain + Motor1 via stub at junction):
+*
+*            RTERM_A=120
+*        +---[CAN_A]---(trunk)---[CAN_J]---(seg2)---[CAN_M2]---+
+*        |   VDRV->RSRC                       |              RTERM_M2=120
+*    [BOARD]                              [stub]
+*                                            |
+*                                        [CAN_M1] (motor1, stub/open end)
+*
+*   - Motor2(CAN_M2) = far end of bus, terminated 120R  (daisy chain end)
+*   - Motor1(CAN_M1) = branches at Junction, NOT terminated (stub, reflector)
+*
+*  Run: psp_cmd.exe this file (workdir = this dir); Probe for waveforms
+*  Sweep: .STEP PARAM S_STUB ... to see stub length effect at 5Mbps data phase
+*
+*  NOTE node naming: PSpice 17.4 rejects V(name) refs for nodes starting with
+*  A B J K M N P Q T U X Z or "_". All nodes here start with "CAN_" (C=safe).
+*  NOTE T elements break node-based .PRINT in 17.4 -> 1Meg probe resistors +
+*  device refs only (see probe section).
+* ============================================================================
+
+* ---- parameters (SI units, lengths in meters; NOTE: bare number = meter,
+*      "1.0m" in SPICE = 1 millimeter!) --------------------------------------
+.PARAM L_TRUNK=1.0     ; board-to-junction trunk length [m]
+.PARAM L_SEG2 =1.5     ; junction-to-motor2 trunk length [m]
+.PARAM S_STUB =0.3     ; stub length to motor1 [m], the swept variable
+.PARAM TDPM   =4.27n   ; per-meter delay = 1/(0.78*c) = 4.27ns/m
+.PARAM RS_SRC =60      ; transmitter dominant output impedance (typical CAN)
+.PARAM R_LOAD =20k     ; receiver input impedance (differential)
+.PARAM C_LOAD =15p     ; receiver/connector input capacitance
+
+* ---- source: board transceiver ---------------------------------------------
+*  10 bit data-phase sequence "1101000110", dominant=2V diff / recessive=0V
+*  5 Mbps: bit=200ns, edge 15ns; 3 consecutive recessive then single
+*  dominant is the worst reflection case
+VDRV CAN_SRC 0 PWL(
++  0    0
++  15n  2      ; bit0 = 1
++  400n 2
++  415n 0      ; bit2 = 0
++  600n 0
++  615n 2      ; bit3 = 1
++  800n 2
++  815n 0      ; bit4 = 0
++  1000n 0
++  1200n 0
++  1400n 0
++  1415n 2     ; bit7 = 1  <-- 000 then single dominant, worst reflection
++  1600n 2
++  1800n 2
++  1815n 0     ; bit9 = 0
++  2.2u 0)
+RSRC CAN_SRC CAN_A {RS_SRC}
+
+* ---- terminators ------------------------------------------------------------
+RTERM_A  CAN_A 0 120       ; board-side termination 120R
+RTERM_M2 CAN_M2 0 120      ; far-end (motor2) termination 120R
+
+* ---- transmission lines (lossless T element, Z0=120, TD=len*per-meter) -----
+T_TRUNK CAN_A 0 CAN_J 0 Z0=120 TD={L_TRUNK*TDPM}
+T_SEG2  CAN_J 0 CAN_M2 0 Z0=120 TD={L_SEG2 *TDPM}
+T_STUB  CAN_J 0 CAN_M1 0 Z0=120 TD={S_STUB *TDPM}
+
+* ---- Motor1 (stub/open end) receiver load ----------------------------------
+RM1 CAN_M1 0 {R_LOAD}
+CM1 CAN_M1 0 {C_LOAD}
+
+* ---- Motor2 (terminated end) receiver load ----------------------------------
+RM2 CAN_M2 0 {R_LOAD}
+CM2 CAN_M2 0 {C_LOAD}
+
+* ---- probe resistors: with T elements present only DEVICE refs work in .PRINT
+RP_B  CAN_SRC 0 1Meg
+RP_A  CAN_A   0 1Meg
+RP_J  CAN_J   0 1Meg
+RP_M1 CAN_M1  0 1Meg
+RP_M2 CAN_M2  0 1Meg
+
+* ---- simulation control -----------------------------------------------------
+* default single run: watch CAN_A / CAN_J / CAN_M1 / CAN_M2 waveforms
+.TRAN 0.1n 2.5u
+.PROBE
+
+* ---- stub length sweep (uncomment to enable; 0..3m step 0.25m) --------------
+* .STEP PARAM S_STUB 0 3 0.25
+* .TRAN 0.1n 2.5u
+
+* ---- worst-case check via Probe (interactive) -------------------------------
+* 5Mbps RX criterion: dominant must be > 0.9V (threshold 0.5V + margin),
+* recessive should return to 0.
+*  NOTE: PSpice has NO .MEAS/.MEASURE dot command (HSPICE/LTspice/ngspice
+*  family only) -- use Probe>Trace>Evaluate Measurement or the .PRINT dump.
+.PRINT TRAN V(RP_B) V(RP_A) V(RP_J) V(RP_M1) V(RP_M2)
+
+* ============================================================================
+* Alt: 1 Mbps arbitration rate (bit=1000ns) -- replace VDRV lines below
+*  VDRV CAN_SRC 0 PWL(
+* + 0 0  75n 2  2000n 2  2075n 0  3000n 0  3075n 2  4000n 2  4075n 0
+* + 5000n 0  6000n 0  7000n 0  7075n 2  8000n 2  9000n 2  9075n 0  11u 0)
+*
+* Alt: star double stub (both motors branch at Junction) -- replace
+*  T_SEG2/T_STUB with:
+*  T_STUB1 CAN_J 0 CAN_M1 0 Z0=120 TD={S_STUB*TDPM}   ; motor1 stub
+*  T_STUB2 CAN_J 0 CAN_M2 0 Z0=120 TD={S_STUB*TDPM}   ; motor2 stub (can add RTERM)
+*  RTERM_M2 CAN_M2 0 120
+* ============================================================================
+.END

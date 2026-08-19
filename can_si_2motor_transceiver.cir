@@ -1,0 +1,165 @@
+* ============================================================================
+*  CAN FD bus simulation -- robotic arm routing replica (real transceiver model)
+*  3 nodes: board + motor1(stub) + motor2(end)   dual-wire differential bus
+* ============================================================================
+*  Transceiver model: TI TCAN1042-Q1 transient SPICE model
+*    (downloaded: models/TCAN1042-Q1.TSM)
+*    - TSM is a TINA-TI macro format; ported to PSpice, pin order is:
+*      .SUBCKT TCAN1042 TXD STB RXD CANH CANL VCC GND
+*    - Model params: RX threshold 0.9V diff, driver RON~36R / open 25k,
+*      TXD hysteresis 0.8/2.0V, input 54k//12pF
+*    - TXD polarity: verified TXD LOW(0V)=dominant, HIGH=recessive
+*      (same as real CAN transceivers; RXD low=dominant). Stimulus below uses
+*      TXD low for dominant bits. Verify during run: RXD should echo TXD level.
+*    - No recessive bias: when not driving, bus is pulled to ~0V by the
+*      60R terminators (diff ~0), common mode ~0V not 2.5V. Differential
+*      observation is unaffected, but do not read CANH/CANL single-ended
+*      voltages as absolute levels.
+*  Bus: twisted pair, single-line odd-mode impedance 60 ohm => diff 120 ohm,
+*  vf~0.78
+*  Topology (daisy chain + motor1 stub):
+*
+*      [BOARD]  X1
+*        | D_TXD1 driven with CAN FD frame
+*      CANH_B/CANL_B --trunk(1.0m)--> HUB/HUBL --seg2(1.5m)--> X3 [MOTOR2] far end
+*                                              |                     +2x60R term
+*                                           stub(0.3m)
+*                                              |
+*                                        X2 [MOTOR1] stub end, no term (reflector)
+*
+*  Watch: differential V(CANH)-V(CANL) at each node + RXD of each transceiver
+*
+*  NOTE on node naming: PSpice 17.4 rejects output-variable references like
+*  V(name) when the node name starts with A B J K M N P Q T U X Z or "_".
+*  All bus/signal nodes here deliberately start with C/D/H/R/S/V to stay safe.
+* ============================================================================
+
+* ---- vendor model ----------------------------------------------------------
+*  PSpice plaintext: models/TCAN1042_q1_pspice.lib (converted from TSM,
+*  VALUE = {} -> VALUE {}). Path is relative to this .cir's directory.
+*  TINA-TI original: models/TCAN1042-Q1.TSM (TINA: Insert->Macro)
+*  T elements are PSpice syntax; for TINA replace or drop the T_* lines.
+.lib "models/TCAN1042_q1_pspice.lib"
+* absolute fallback if not found:
+* .lib "E:\workspace2608\03\Ragtime_Firmwares\si_models\models\TCAN1042_q1_pspice.lib"
+
+* ---- PSpice-port fixes for the TI TINA model ---------------------------------
+*  The TSM->PSpice port of MUX2X1_0 / LOGIC_IO_0 (VSWITCH-based) misbehaves /
+*  fails to converge in OrCAD PSpice 17.4 (they ARE pure digital stages).
+*  Verified in isolation: driver chain (BUF_0/PREDRIVER_0/DRVRCAN_0/STBMODE_0)
+*  and receivers (HSRCVR_0/LPRCVR_0/RECV) are correct as-is.
+*  Replace with clean EVALUE equivalents (last definition wins over .lib).
+*  STB=0 selects RXD1 (high-speed receiver), matches MUX2X1_0 truth table.
+.SUBCKT MUX2X1_0  RXDINT1 RXDINT2 STB OUT VDD VSS
+E_OUT OUT 0 VALUE {IF(V(STB)>(V(VDD)+V(VSS))*0.5, V(RXDINT2), V(RXDINT1))}
+.ENDS MUX2X1_0
+.SUBCKT LOGIC_IO_0  INP RXD VDD VSS
+E_OUT RXD 0 VALUE {IF(V(INP)>(V(VDD)+V(VSS))*0.5, V(VDD), V(VSS))}
+.ENDS LOGIC_IO_0
+
+* ---- parameters ------------------------------------------------------------
+.PARAM L_TRUNK=1.0     ; trunk board->junction [m] (NOTE: 1.0m in SPICE = 1 mm!)
+.PARAM L_SEG2 =1.5     ; junction->motor2 [m]
+.PARAM S_STUB =0.3     ; stub to motor1 [m], main sweep variable
+.PARAM TDPM   =4.27n   ; per-meter delay 1/(0.78c)=4.27ns/m
+
+* ---- power and mode pins ---------------------------------------------------
+VCC  VCCP 0 5
+VSTB1 STB1 0 0          ; STB=0 => Normal mode (X1 board)
+VSTB2 STB2 0 0          ; X2 motor1
+VSTB3 STB3 0 0          ; X3 motor2
+
+* ---- terminators (both ends 60R: CANH->GND / CANL->GND, diff eq 120R) ------
+RTH_A  CANH_B 0 60
+RTL_A  CANL_B 0 60
+RTH_M2 CANH_M2 0 60
+RTL_M2 CANL_M2 0 60
+
+* ---- probe resistors (1Meg, negligible load) --------------------------------
+*  PSpice 17.4 bug: with lossless T elements present, .PRINT V(nodename)
+*  fails ("PRINT device X is undefined") -- only DEVICE-based output refs work.
+*  So each node of interest gets a resistor to ground; print V(Rxx) (=V(node)).
+*  RPR_M1* : motor1 stub nodes (no termination there)
+RPR_M1H CANH_M1 0 1Meg
+RPR_M1L CANL_M1 0 1Meg
+*  RPR_RXD*: transceiver RXD outputs (0V/5V digital), 1Meg load is negligible
+RPR_RXD1 RXD1 0 1Meg
+RPR_RXD2 RXD2 0 1Meg
+RPR_RXD3 RXD3 0 1Meg
+
+* ---- differential transmission lines (one per wire, Z0=60 single) ----------
+*  trunk: board -> junction
+T_TRK_H CANH_B 0 HUB 0 Z0=60 TD={L_TRUNK*TDPM}
+T_TRK_L CANL_B 0 HUBL 0 Z0=60 TD={L_TRUNK*TDPM}
+*  seg2:  junction -> M2
+T_SG2_H HUB 0 CANH_M2 0 Z0=60 TD={L_SEG2*TDPM}
+T_SG2_L HUBL 0 CANL_M2 0 Z0=60 TD={L_SEG2*TDPM}
+*  stub:  junction -> M1
+T_STB_H HUB 0 CANH_M1 0 Z0=60 TD={S_STUB*TDPM}
+T_STB_L HUBL 0 CANL_M1 0 Z0=60 TD={S_STUB*TDPM}
+
+* ---- transceiver instances -------------------------------------------------
+*  pin order confirmed: .subckt TCAN1042 TXD STB RXD CANH CANL VCC GND
+*  (TINA-TI: Insert->Macro load models/TCAN1042-Q1.TSM, wire by pin name)
+* X1 = board: TXD sends the frame
+X1 D_TXD1 STB1 RXD1 CANH_B CANL_B VCCP 0 TCAN1042
+* X2 = motor1 (stub): idle, TXD low (recessive), receive only
+X2 D_TXD2 STB2 RXD2 CANH_M1 CANL_M1 VCCP 0 TCAN1042
+* X3 = motor2 (far end): idle, receive only
+X3 D_TXD3 STB3 RXD3 CANH_M2 CANL_M2 VCCP 0 TCAN1042
+
+* ---- stimulus: X1 sends CAN FD data phase, 10 bit seq 1101000110 -----------
+*  Verified model polarity (single-transceiver test, PSpice 17.4):
+*    TXD LOW(0V)  = DOMINANT  -> CANH driven, RXD low
+*    TXD HIGH(5V) = RECESSIVE -> bus released, RXD high
+*  This matches real CAN transceivers (active-low TXD). RXD echoes TXD level.
+*  bit=200ns @5Mbps, edge 15ns; long dominant run then a single recessive is
+*  the worst discharge/ringing case (dominant 815n..1400n, recessive 1415n..1800n).
+VTX1 D_TXD1 0 PWL(
++ 0    5     ; idle/recessive (TXD high)
++ 400n 5
++ 415n 0     ; bit2=0 dominant
++ 600n 0
++ 615n 5     ; bit3=1 recessive
++ 800n 5
++ 815n 0     ; bit4=0 dominant
++ 1200n 0
++ 1400n 0
++ 1415n 5    ; bit7=1  <-- single recessive after long dominant, worst discharge
++ 1800n 5
++ 1815n 0    ; bit9=0 dominant
++ 2.2u 5)    ; back to recessive
+
+* ---- idle stimuli ----------------------------------------------------------
+VTX2 D_TXD2 0 5     ; motor1 idle: TXD high = recessive (not driving)
+VTX3 D_TXD3 0 5     ; motor2 idle: TXD high = recessive (not driving)
+
+* ---- simulation control ----------------------------------------------------
+*  Single run (S_STUB=0.3m default). Full sweep results in README_can_si.md.
+.TRAN 0.1n 2.5u
+.PROBE
+
+* ---- stub length sweep (enable for sweep; S_STUB=0 triggers ORPSIM-15138) ---
+* .STEP PARAM S_STUB LIST 0.25 0.5 1.0 2.0 3.0
+* .TRAN 0.1n 2.5u
+* .PROBE
+
+* ---- receive-side differential and RXD verification -------------------------
+*  NOTE: PSpice has NO .MEAS/.MEASURE dot command (HSPICE/LTspice/ngspice
+*  family only) -- any such line gives ORPSIM-16056. Measure interactively in
+*  Probe instead, e.g. Trace>Evaluate Measurement: Max(V(CANH_B)-V(CANL_B)).
+*  NOTE2: PSpice 17.4 .PRINT/.PLOT/.FOUR break for NODE refs when lossless T
+*  elements exist. Device refs work: V(RTH_A)=V(CANH_B), V(RTL_A)=V(CANL_B),
+*  V(RTH_M2)=V(CANH_M2), V(RTL_M2)=V(CANL_M2), V(RPR_M1H)=V(CANH_M1),
+*  V(RPR_M1L)=V(CANL_M1), V(RPR_RXDx)=V(RXDx). Differential=CANH-CANL.
+.PRINT TRAN V(RTH_A) V(RTL_A) V(RTH_M2) V(RTL_M2)
+.PRINT TRAN V(RPR_M1H) V(RPR_M1L) V(RPR_RXD1) V(RPR_RXD2) V(RPR_RXD3)
+*  RXD1/2/3 should reproduce the TXD bit sequence on the waveform
+
+* ============================================================================
+* Alt A: let motor1 send, board/motor2 receive => feed the frame into X2's TXD,
+*   tie X1's TXD to 0 (recessive)
+* Alt B: star double stub => split T_SG2_* into two stubs, motor2 terminated
+* Alt C: 1Mbps arbitration phase => multiply all pulse times by 5
+* ============================================================================
+.END

@@ -1,0 +1,11 @@
+# PSpice run artifacts (regenerable)
+*.dat
+*.out
+*.out.*
+*.mif
+*.prb
+*.log
+
+# PSpice-generated symbol index / backup
+*.ind
+*.OBK
