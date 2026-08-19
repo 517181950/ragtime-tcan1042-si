@@ -56,6 +56,15 @@ E_OUT OUT 0 VALUE {IF(V(STB)>(V(VDD)+V(VSS))*0.5, V(RXDINT2), V(RXDINT1))}
 .SUBCKT LOGIC_IO_0  INP RXD VDD VSS
 E_OUT RXD 0 VALUE {IF(V(INP)>(V(VDD)+V(VSS))*0.5, V(VDD), V(VSS))}
 .ENDS LOGIC_IO_0
+*  BUF_0 (TXD/STB hysteresis buffer): the TINA VSWITCH stage makes TXDint
+*  drift up to VDD while TXD=0 in PSpice 17.4, falsely releasing the driver
+*  ~110ns after a dominant edge that follows a long single-recessive bit.
+*  Replace with a smooth tanh buffer (threshold=VCM, ~0.2V transition):
+*  verified RXD fully decodes the 01010 worst-case sequence.
+.SUBCKT BUF_0  TXD TXDINT STB STBINT VDD VSS
+E_TXD TXDINT 0 VALUE {0.5*((V(VDD)+V(VSS))+(V(VDD)-V(VSS))*TANH(20*(V(TXD)-0.5*(V(VDD)+V(VSS)))))}
+E_STB STBINT 0 VALUE {0.5*((V(VDD)+V(VSS))+(V(VDD)-V(VSS))*TANH(20*(V(STB)-0.5*(V(VDD)+V(VSS)))))}
+.ENDS BUF_0
 
 * ---- parameters ------------------------------------------------------------
 .PARAM L_TRUNK=1.0     ; trunk board->junction [m] (NOTE: 1.0m in SPICE = 1 mm!)

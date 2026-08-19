@@ -1,0 +1,190 @@
+* ============================================================================
+*  CAN FD bus simulation -- robotic arm 7-joint routing replica (real model)
+*  8 transceivers: controller IN + 7 joints J1..J7, daisy-chained through
+*  4 splitter boards. Dual-wire differential bus, 5 Mbps data phase.
+*
+*  Topology (all lengths in meters, edit in the PARAM block below):
+*
+*   IN --L1-- SB1 --L3-- SB2 --L5-- SB3 --L8-- SB4 --L10-- J6
+*    |          |           |           |             |
+*   L2         L4      +---(L6)---(L7)+    L9         L11
+*    |          |       |          |      |           |
+*   J1         J2      J3         J4     J5          J7
+*                                                   (+terminator)
+*
+*   IN and J7 each terminated with 120R across the differential pair.
+*   J1..J6 are unterminated stub ends (reflectors) -- the SI question.
+* ============================================================================
+*  Transceiver model: TI TCAN1042-Q1, see can_si_2motor_transceiver.cir and
+*  README_can_si.md for details. Subckt pin order:
+*      .SUBCKT TCAN1042 TXD STB RXD CANH CANL VCC GND
+*  TXD polarity (verified): TXD LOW(0V)=dominant, HIGH=recessive.
+*  RXD low = dominant, high = recessive (echoes TXD).
+* ============================================================================
+
+* ---- vendor model ----------------------------------------------------------
+.lib "models/TCAN1042_q1_pspice.lib"
+* absolute fallback if not found:
+* .lib "E:\workspace2608\03\Ragtime_Firmwares\si_models\models\TCAN1042_q1_pspice.lib"
+
+* ---- PSpice-port fixes for the TI TINA model (must stay, last def wins) ----
+.SUBCKT MUX2X1_0  RXDINT1 RXDINT2 STB OUT VDD VSS
+E_OUT OUT 0 VALUE {IF(V(STB)>(V(VDD)+V(VSS))*0.5, V(RXDINT2), V(RXDINT1))}
+.ENDS MUX2X1_0
+.SUBCKT LOGIC_IO_0  INP RXD VDD VSS
+E_OUT RXD 0 VALUE {IF(V(INP)>(V(VDD)+V(VSS))*0.5, V(VDD), V(VSS))}
+.ENDS LOGIC_IO_0
+*  BUF_0 (TXD/STB hysteresis buffer): the TINA VSWITCH stage makes TXDint
+*  drift up to VDD while TXD=0 in PSpice 17.4, falsely releasing the driver
+*  ~110ns after a dominant edge that follows a long single-recessive bit.
+*  Replace with a smooth tanh buffer (threshold=VCM, ~0.2V transition):
+*  verified RXD fully decodes the 01010 worst-case sequence.
+.SUBCKT BUF_0  TXD TXDINT STB STBINT VDD VSS
+E_TXD TXDINT 0 VALUE {0.5*((V(VDD)+V(VSS))+(V(VDD)-V(VSS))*TANH(20*(V(TXD)-0.5*(V(VDD)+V(VSS)))))}
+E_STB STBINT 0 VALUE {0.5*((V(VDD)+V(VSS))+(V(VDD)-V(VSS))*TANH(20*(V(STB)-0.5*(V(VDD)+V(VSS)))))}
+.ENDS BUF_0
+
+* ============================================================================
+*  >>> EDIT YOUR ACTUAL WIRE LENGTHS HERE <<<
+*  Values are METERS as bare numbers (NOTE: 1.0m in SPICE = 1 millimeter!)
+*  Edit ONLY the numbers after "=" on the L1..L11 lines below.
+* ============================================================================
+.PARAM L1=0.5   ; IN  -> splitter board 1
+.PARAM L2=0.3   ; SB1 -> joint 1        (stub)
+.PARAM L3=0.5   ; SB1 -> splitter board 2
+.PARAM L4=0.3   ; SB2 -> joint 2        (stub)
+.PARAM L5=0.5   ; SB2 -> splitter board 3
+.PARAM L6=0.3   ; SB3 -> joint 3        (stub)
+.PARAM L7=0.3   ; SB3 -> joint 4        (stub)
+.PARAM L8=0.5   ; SB3 -> splitter board 4
+.PARAM L9=0.3   ; SB4 -> joint 5        (stub)
+.PARAM L10=0.3  ; SB4 -> joint 6        (stub)
+.PARAM L11=0.5  ; SB4 -> joint 7        (stub, terminated end)
+.PARAM TDPM=4.27n ; per-meter delay 1/(0.78c), do not change
+* ============================================================================
+
+* ---- power and mode pins ---------------------------------------------------
+VCC  VCCP  0 5
+VSTB_IN  STB_IN  0 0          ; STB=0 => Normal mode (controller IN)
+VSTB_J1  STB_J1  0 0          ; joints all normal mode
+VSTB_J2  STB_J2  0 0
+VSTB_J3  STB_J3  0 0
+VSTB_J4  STB_J4  0 0
+VSTB_J5  STB_J5  0 0
+VSTB_J6  STB_J6  0 0
+VSTB_J7  STB_J7  0 0
+
+* ---- terminators: 120R across the pair at BOTH ends -------------------------
+*  Modeled as 2x60R series with a common-mode midpoint (CM_*). RCM_* is a
+*  20k anchor to ground: keeps the floating common mode defined for SPICE
+*  while the differential termination stays 120R (60R impact is negligible).
+*  If your real board uses 60R each line to GND instead, replace RCM_* + the
+*  series pair with two 60R to GND.
+RTH_IN  IN_H   CM_IN 60
+RTL_IN  IN_L   CM_IN 60
+RCM_IN  CM_IN  0    20k
+RTH_J7  R_J7_H CM_J7 60
+RTL_J7  R_J7_L CM_J7 60
+RCM_J7  CM_J7  0    20k
+
+* ---- probe resistors (1Meg, negligible) for .PRINT / Probe ------------------
+*  PSpice 17.4: with lossless T elements .PRINT V(nodename) fails; device refs
+*  work. Each node of interest gets a 1Meg resistor to ground.
+RPR_INH  IN_H   0 1Meg
+RPR_INL  IN_L   0 1Meg
+RPR_J1H  R_J1_H 0 1Meg
+RPR_J1L  R_J1_L 0 1Meg
+RPR_J4H  R_J4_H 0 1Meg
+RPR_J4L  R_J4_L 0 1Meg
+RPR_J7H  R_J7_H 0 1Meg
+RPR_J7L  R_J7_L 0 1Meg
+RPR_RXD_IN RXD_IN 0 1Meg
+RPR_RXD_J1 RXD_J1 0 1Meg
+RPR_RXD_J2 RXD_J2 0 1Meg
+RPR_RXD_J3 RXD_J3 0 1Meg
+RPR_RXD_J4 RXD_J4 0 1Meg
+RPR_RXD_J5 RXD_J5 0 1Meg
+RPR_RXD_J6 RXD_J6 0 1Meg
+RPR_RXD_J7 RXD_J7 0 1Meg
+
+* ---- differential transmission lines (one per wire, Z0=60 single) ----------
+*  trunk + splitter links
+T1_H  IN_H   0 SB1_H  0 Z0=60 TD={L1*TDPM}
+T1_L  IN_L   0 SB1_L  0 Z0=60 TD={L1*TDPM}
+T3_H  SB1_H  0 SB2_H  0 Z0=60 TD={L3*TDPM}
+T3_L  SB1_L  0 SB2_L  0 Z0=60 TD={L3*TDPM}
+T5_H  SB2_H  0 SB3_H  0 Z0=60 TD={L5*TDPM}
+T5_L  SB2_L  0 SB3_L  0 Z0=60 TD={L5*TDPM}
+T8_H  SB3_H  0 SB4_H  0 Z0=60 TD={L8*TDPM}
+T8_L  SB3_L  0 SB4_L  0 Z0=60 TD={L8*TDPM}
+*  stubs to joints (unterminated ends, reflectors)
+T2_H  SB1_H  0 R_J1_H 0 Z0=60 TD={L2*TDPM}
+T2_L  SB1_L  0 R_J1_L 0 Z0=60 TD={L2*TDPM}
+T4_H  SB2_H  0 R_J2_H 0 Z0=60 TD={L4*TDPM}
+T4_L  SB2_L  0 R_J2_L 0 Z0=60 TD={L4*TDPM}
+T6_H  SB3_H  0 R_J3_H 0 Z0=60 TD={L6*TDPM}
+T6_L  SB3_L  0 R_J3_L 0 Z0=60 TD={L6*TDPM}
+T7_H  SB3_H  0 R_J4_H 0 Z0=60 TD={L7*TDPM}
+T7_L  SB3_L  0 R_J4_L 0 Z0=60 TD={L7*TDPM}
+T9_H  SB4_H  0 R_J5_H 0 Z0=60 TD={L9*TDPM}
+T9_L  SB4_L  0 R_J5_L 0 Z0=60 TD={L9*TDPM}
+T10_H SB4_H  0 R_J6_H 0 Z0=60 TD={L10*TDPM}
+T10_L SB4_L  0 R_J6_L 0 Z0=60 TD={L10*TDPM}
+T11_H SB4_H  0 R_J7_H 0 Z0=60 TD={L11*TDPM}
+T11_L SB4_L  0 R_J7_L 0 Z0=60 TD={L11*TDPM}
+
+* ---- transceiver instances (pin order TXD STB RXD CANH CANL VCC GND) --------
+X_IN D_TXD_IN STB_IN RXD_IN IN_H   IN_L   VCCP 0 TCAN1042
+X_J1 D_TXD_J1 STB_J1 RXD_J1 R_J1_H R_J1_L VCCP 0 TCAN1042
+X_J2 D_TXD_J2 STB_J2 RXD_J2 R_J2_H R_J2_L VCCP 0 TCAN1042
+X_J3 D_TXD_J3 STB_J3 RXD_J3 R_J3_H R_J3_L VCCP 0 TCAN1042
+X_J4 D_TXD_J4 STB_J4 RXD_J4 R_J4_H R_J4_L VCCP 0 TCAN1042
+X_J5 D_TXD_J5 STB_J5 RXD_J5 R_J5_H R_J5_L VCCP 0 TCAN1042
+X_J6 D_TXD_J6 STB_J6 RXD_J6 R_J6_H R_J6_L VCCP 0 TCAN1042
+X_J7 D_TXD_J7 STB_J7 RXD_J7 R_J7_H R_J7_L VCCP 0 TCAN1042
+
+* ---- stimulus, SCENARIO A (default): IN sends, all joints receive ----------
+*  CAN FD data phase 5 Mbps, 10 bit seq 1101000110, bit=200ns, edge 15ns.
+*  Long dominant run (815n..1400n) then a single recessive = worst discharge.
+VTX_IN D_TXD_IN 0 PWL(
++ 0    5
++ 400n 5
++ 415n 0     ; bit2=0 dominant
++ 600n 0
++ 615n 5     ; bit3=1 recessive
++ 800n 5
++ 815n 0     ; bit4=0 dominant
++ 1200n 0
++ 1400n 0
++ 1415n 5    ; bit7=1  <-- single recessive after long dominant
++ 1800n 5
++ 1815n 0    ; bit9=0 dominant
++ 2.2u 5)
+VTX_J1 D_TXD_J1 0 5     ; idle: TXD high = recessive
+VTX_J2 D_TXD_J2 0 5
+VTX_J3 D_TXD_J3 0 5
+VTX_J4 D_TXD_J4 0 5
+VTX_J5 D_TXD_J5 0 5
+VTX_J6 D_TXD_J6 0 5
+VTX_J7 D_TXD_J7 0 5
+
+* ---- simulation control ----------------------------------------------------
+.TRAN 0.1n 2.5u
+.PROBE
+
+* ---- receive-side verification ----------------------------------------------
+*  PSpice has NO .MEAS/.MEASURE (ORPSIM-16056). Measure in Probe instead.
+*  Differential at a node = V(RPR_xxH)-V(RPR_xxL) (probe resistors).
+.PRINT TRAN V(RPR_INH) V(RPR_INL) V(RPR_J1H) V(RPR_J1L) V(RPR_J4H) V(RPR_J4L) V(RPR_J7H) V(RPR_J7L)
+.PRINT TRAN V(RPR_RXD_IN) V(RPR_RXD_J1) V(RPR_RXD_J2) V(RPR_RXD_J3) V(RPR_RXD_J4) V(RPR_RXD_J5) V(RPR_RXD_J6) V(RPR_RXD_J7)
+*  All RXD should reproduce the TXD bit sequence (0=dominant, 5=recessive).
+
+* ============================================================================
+*  SCENARIO B (alt): let joint 4 send, IN + other joints receive
+*  - uncomment the 4 lines below, comment the VTX_IN PWL block above, and
+*    change VTX_J4 to the PWL stimulus (copy the PWL from VTX_IN).
+*  .PARAM SEND="J4"
+*  VTX_IN D_TXD_IN 0 5
+*  VTX_J4 D_TXD_J4 0 PWL(...)
+* ============================================================================
+.END

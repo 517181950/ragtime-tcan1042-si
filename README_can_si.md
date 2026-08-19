@@ -1,4 +1,4 @@
-# CAN FD 总线 SI 验证模型（两电机 + 分叉）
+# CAN FD 总线 SI 验证模型（机械臂 FDCAN）
 
 OrCAD 全家桶（Capture + PSpice AD）用，参照 `ragtime_florid` / `dm_mc02` 的 FDCAN：
 仲裁 1 Mbps / 数据 5 Mbps，双绞差分线 120Ω（单线奇模 60Ω，vf~0.78）。
@@ -8,9 +8,11 @@ OrCAD 全家桶（Capture + PSpice AD）用，参照 `ragtime_florid` / `dm_mc02
 | 文件 | 说明 |
 |------|------|
 | `can_si_2motor.cir` | 理想收发器版（纯内置元件，先跑这个理解拓扑/反射） |
-| `can_si_2motor_transceiver.cir` | 真实收发器版（TI TCAN1042-Q1 SPICE 模型，正式模型） |
+| `can_si_2motor_transceiver.cir` | 真实收发器版，3 节点（板卡+电机1分叉+电机2末端） |
+| `can_si_7joint.cir` | **真实收发器版，7 关节树形**（控制器 IN + 7 关节 + 4 分线板，11 段线，8 收发器） |
 | `models/TCAN1042-Q1.TSM` | TI 官方 TINA-TI 宏（原版，`https://www.ti.com/lit/zip/sllm403`） |
-| `models/TCAN1042_q1_pspice.lib` | 由 TSM 转写的 PSpice 明文版（OrCAD 用这个，含 2 个覆盖补丁） |
+| `models/TCAN1042_q1_pspice.lib` | 由 TSM 转写的 PSpice 明文版（OrCAD 用这个，含覆盖补丁） |
+| `仿真结果判读参照表.md` | **判读指南**：看什么 / 判据 / 实测值 / 症状→对策 / 线长决策树 |
 | 本文件 | 任务目的 / 步骤 / 判据 / 验证状态 |
 
 ## 收发器模型与修复（关键）
@@ -33,14 +35,21 @@ OrCAD 全家桶（Capture + PSpice AD）用，参照 `ragtime_florid` / `dm_mc02
 收发器一致（active-low）。PSpice 17.4 实测：TXD=0 → CANH 被 36Ω 驱动高、差分≈2.2V；
 TXD=5 → 总线释放、差分≈0。**RXD 与 TXD 电平同相**（RXD 低=收到 dominant）。
 
-**⚠ 模型需 2 个覆盖补丁才能正确工作（已内嵌在 .cir 里）**：
-TSM→PSpice 转换中 `MUX2X1_0`（RXD 选通）和 `LOGIC_IO_0`（RXD 输出级）这两个
-VSWITCH 数字级在 OrCAD 17.4 下行为错误/收敛失败。已在 .cir 里 `.lib` 之后用
-等价的纯 EVALUE 子电路覆盖（PSpice 同名子电路后者胜）：
+**⚠ 模型需 3 个覆盖补丁才能正确工作（已内嵌在 .cir 里）**：
+TSM→PSpice 转换中 `MUX2X1_0`（RXD 选通）、`LOGIC_IO_0`（RXD 输出级）和
+`BUF_0`（TXD/STB 迟滞输入缓冲）这三个 VSWITCH 数字级在 OrCAD 17.4 下行为错误/收敛失败。
+已在 .cir 里 `.lib` 之后用等价的 EVALUE 子电路覆盖（PSpice 同名子电路后者胜）：
 - `MUX2X1_0`：`OUT = IF(STB>2.5V, RXD2, RXD1)`
 - `LOGIC_IO_0`：`RXD = IF(INP>2.5V, VDD, 0)`
-驱动链（BUF_0/PREDRIVER_0/DRVRCAN_0/STBMODE_0）与接收器（HSRCVR_0/LPRCVR_0/RECV）
-隔离实测全部正确，无需改。STB 高=待机（总线接地）、STB 低=正常，极性正常。
+- `BUF_0`：光滑 TANH 缓冲（阈值=VCM，过渡 ~0.2V）。**不能用硬 `IF()`**：TXD 跳变沿会
+  ORPSIM-15138 不收敛。TANH 已实测收敛。
+- 驱动链（PREDRIVER_0/DRVRCAN_0/STBMODE_0）与接收器（HSRCVR_0/LPRCVR_0/RECV）隔离实测全对。
+  STB 高=待机（总线接地）、STB 低=正常，极性正常。
+
+**⚠ BUF_0 不补的后果（已实测复现，3 节点与 7 关节版同）**：`BUF_0` 的 VSWITCH 级在
+17.4 下会让 **TXDint 在 TXD=0 固态下自行爬升至 VDD**，导致驱动在"长显性→单隐性→显性"
+模式的显性位 +~110ns 处提前释放（假塌陷，RXD 误判 1）。该现象 TMAX=0.1n 也压不掉，
+是模型移植缺陷而非步进伪象。**本仓库所有 .cir 必须带 3 个补丁一起用。**
 
 **模型无 recessive 偏置**：不驱动时总线靠 60Ω 终端拉到≈0V（差分≈0），共模≈2.44V（模型泄漏位）。
 SI 差分观察不受影响，但别把 CANH/CANL 单端对地电压当绝对电平。
@@ -52,8 +61,9 @@ SI 差分观察不受影响，但别把 CANH/CANL 单端对地电压当绝对电
 | 理想版 `can_si_2motor.cir` | ✅ PSpice 17.4 跑通（job 0.4s）；显性≈1.0V（源 2V×120R/(60R+120R) 分压，裕量偏薄，只作反射形态参考，绝对电平以收发器版为准） |
 | 收发器版 `.lib` 语法/结构 | ✅ 26 子电路、括号平衡 |
 | 收发器版 `.cir`（含覆盖补丁） | ✅ **完整跑通**（3 收发器 + 3 组 T 线 + 终端，job 20s） |
-| 收发器版瞬态行为 | ✅ **正确**：显性差分 2.24~2.26V（全节点）、隐性≈0、RXD1/2/3 完整还原 TXD 位序列 |
+| 收发器版瞬态行为 | ✅ **正确**：显性差分 2.24~2.26V（全节点）、隐性≈0、RXD1/2/3 完整还原 TXD 位序列（含 worst-case 单隐性位，BUF_0 补丁后） |
 | 桩长扫描 S_STUB=0.25/0.5/1/2/3m | ✅ 全部解码正确（见下表） |
+| `can_si_7joint.cir`（7 关节 + 4 分线板，8 收发器，默认线长） | ✅ 跑通（job 15s）；8 节点 RXD 全还原 `01010`；显性 2.46~2.90V；桩端下冲 -0.28V；J7 放电恢复 20ns，全合格 |
 
 **单跑结果（S_STUB=0.3m，5Mbps 位序列）**：
 - 显性稳态差分 ≈ 2.25V（≥1.5V 判据，裕量 0.75V）；隐性差分 ≈ 0。
@@ -129,4 +139,6 @@ CAN FD 数据段 5 Mbps 时一个比特只有 200ns，走线是**传输线**：
 3. 无损线：没算线损/趋肤，几米内可接受。
 4. 电机 PWM 大电流对总线的传导/辐射耦合没建模（EMC 另类仿真）。
 5. 理想版是单端模型（差分对折成一条线）；真实收发器版是双线差分模型。
-6. 端口模型转换的两处 EVALUE 覆盖（MUX2X1_0/LOGIC_IO_0）只做数字传递，不影响总线电气行为。
+6. 模型转换的三处 EVALUE 覆盖（MUX2X1_0/LOGIC_IO_0/BUF_0）只做数字传递，不影响总线电气行为。
+7. **早期结论修正**：早前称"RXD1/2/3 全还原 TXD"未覆盖"长显性→单隐性→显性"模式的
+   末位（该位在未修 BUF_0 时假塌陷）；补丁后已重跑验证全序列正确。
