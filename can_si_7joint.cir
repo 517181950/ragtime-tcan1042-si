@@ -49,17 +49,17 @@ E_STB STBINT 0 VALUE {0.5*((V(VDD)+V(VSS))+(V(VDD)-V(VSS))*TANH(20*(V(STB)-0.5*(
 *  Values are METERS as bare numbers (NOTE: 1.0m in SPICE = 1 millimeter!)
 *  Edit ONLY the numbers after "=" on the L1..L11 lines below.
 * ============================================================================
-.PARAM L1=0.5   ; IN  -> splitter board 1
-.PARAM L2=0.3   ; SB1 -> joint 1        (stub)
-.PARAM L3=0.5   ; SB1 -> splitter board 2
-.PARAM L4=0.3   ; SB2 -> joint 2        (stub)
-.PARAM L5=0.5   ; SB2 -> splitter board 3
-.PARAM L6=0.3   ; SB3 -> joint 3        (stub)
-.PARAM L7=0.3   ; SB3 -> joint 4        (stub)
-.PARAM L8=0.5   ; SB3 -> splitter board 4
-.PARAM L9=0.3   ; SB4 -> joint 5        (stub)
-.PARAM L10=0.3  ; SB4 -> joint 6        (stub)
-.PARAM L11=0.5  ; SB4 -> joint 7        (stub, terminated end)
+.PARAM L1=0.1    ; IN  -> splitter board 1     [10cm]
+.PARAM L2=0.14   ; SB1 -> joint 1        (stub) [14cm]
+.PARAM L3=0.72   ; SB1 -> splitter board 2      [72cm]
+.PARAM L4=0.45   ; SB2 -> joint 2        (stub) [45cm]
+.PARAM L5=0.20   ; SB2 -> splitter board 3      [20cm]
+.PARAM L6=0.10   ; SB3 -> joint 3        (stub) [10cm]
+.PARAM L7=0.22   ; SB3 -> joint 4        (stub) [22cm]
+.PARAM L8=0.45   ; SB3 -> splitter board 4      [45cm]
+.PARAM L9=0.0    ; SB4 -> joint 5  DIRECT PLUG, no T-line (L9=0 would fail)
+.PARAM L10=0.10  ; SB4 -> joint 6        (stub) [10cm]
+.PARAM L11=0.28  ; SB4 -> joint 7        (stub, terminated end) [28cm]
 .PARAM TDPM=4.27n ; per-meter delay 1/(0.78c), do not change
 * ============================================================================
 
@@ -126,8 +126,8 @@ T6_H  SB3_H  0 R_J3_H 0 Z0=60 TD={L6*TDPM}
 T6_L  SB3_L  0 R_J3_L 0 Z0=60 TD={L6*TDPM}
 T7_H  SB3_H  0 R_J4_H 0 Z0=60 TD={L7*TDPM}
 T7_L  SB3_L  0 R_J4_L 0 Z0=60 TD={L7*TDPM}
-T9_H  SB4_H  0 R_J5_H 0 Z0=60 TD={L9*TDPM}
-T9_L  SB4_L  0 R_J5_L 0 Z0=60 TD={L9*TDPM}
+*  J5 is hardware DIRECT-PLUG at SB4 (L9=0): no T-line, transceiver sits
+*  on the splitter node itself. (Zero-length T fails convergence ORPSIM-15138)
 T10_H SB4_H  0 R_J6_H 0 Z0=60 TD={L10*TDPM}
 T10_L SB4_L  0 R_J6_L 0 Z0=60 TD={L10*TDPM}
 T11_H SB4_H  0 R_J7_H 0 Z0=60 TD={L11*TDPM}
@@ -139,7 +139,7 @@ X_J1 D_TXD_J1 STB_J1 RXD_J1 R_J1_H R_J1_L VCCP 0 TCAN1042
 X_J2 D_TXD_J2 STB_J2 RXD_J2 R_J2_H R_J2_L VCCP 0 TCAN1042
 X_J3 D_TXD_J3 STB_J3 RXD_J3 R_J3_H R_J3_L VCCP 0 TCAN1042
 X_J4 D_TXD_J4 STB_J4 RXD_J4 R_J4_H R_J4_L VCCP 0 TCAN1042
-X_J5 D_TXD_J5 STB_J5 RXD_J5 R_J5_H R_J5_L VCCP 0 TCAN1042
+X_J5 D_TXD_J5 STB_J5 RXD_J5 SB4_H  SB4_L  VCCP 0 TCAN1042
 X_J6 D_TXD_J6 STB_J6 RXD_J6 R_J6_H R_J6_L VCCP 0 TCAN1042
 X_J7 D_TXD_J7 STB_J7 RXD_J7 R_J7_H R_J7_L VCCP 0 TCAN1042
 
